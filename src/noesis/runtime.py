@@ -24,12 +24,12 @@ class AppRuntimeServices:
         """
         self._agent = agent
 
-    async def call_tool(self, ctx: "Context", name: str, **kwargs) -> Any:
+    async def call_tool(self, ctx: "Context", tool_name: str, **kwargs) -> Any:
         """Call a registered tool.
         
         Args:
             ctx: Current context
-            name: Tool name
+            tool_name: Tool name
             **kwargs: Tool arguments
             
         Returns:
@@ -38,13 +38,13 @@ class AppRuntimeServices:
         Raises:
             ToolError: If tool not found or execution fails
         """
-        if name not in self._agent._tools:
-            raise ToolError(f"Tool not found: {name}")
+        if tool_name not in self._agent._tools:
+            raise ToolError(f"Tool not found: {tool_name}")
 
-        tool = self._agent._tools[name]
+        tool = self._agent._tools[tool_name]
         
         # Log tool call event
-        ctx.add_event("tool_call", tool=name, kwargs=kwargs)
+        ctx.add_event("tool_call", tool=tool_name, kwargs=kwargs)
 
         try:
             # Handle Agent-as-tool (has __call__ method)
@@ -55,11 +55,11 @@ class AppRuntimeServices:
                 # Regular function tool
                 result = await tool(**kwargs)
             
-            ctx.add_event("tool_result", tool=name, success=True)
+            ctx.add_event("tool_result", tool=tool_name, success=True)
             return result
         except Exception as e:
-            ctx.add_event("tool_result", tool=name, success=False, error=str(e))
-            raise ToolError(f"Tool '{name}' failed: {str(e)}") from e
+            ctx.add_event("tool_result", tool=tool_name, success=False, error=str(e))
+            raise ToolError(f"Tool '{tool_name}' failed: {str(e)}") from e
 
     async def memory_put(
         self, ctx: "Context", content: str, *, kind: str, meta: dict

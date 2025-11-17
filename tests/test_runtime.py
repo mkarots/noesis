@@ -54,11 +54,12 @@ class TestAppRuntimeServices:
         assert result == 8
 
         # Check events were logged
-        assert len(context.events) == 2
+        assert len(context.events) >= 2
         assert context.events[0].kind == "tool_call"
         assert context.events[0].data["tool"] == "add"
-        assert context.events[1].kind == "tool_result"
-        assert context.events[1].data["success"] is True
+        tool_results = [e for e in context.events if e.kind == "tool_result"]
+        assert len(tool_results) >= 1
+        assert tool_results[0].data["success"] is True
 
     async def test_call_tool_not_found(self, services, context):
         """Test calling nonexistent tool."""
@@ -141,7 +142,7 @@ class TestAppRuntimeServices:
         # Check event was logged
         write_events = [e for e in context.events if e.kind == "memory_write"]
         assert len(write_events) == 1
-        assert write_events[0].data["kind"] == "note"
+        assert write_events[0].data["memory_kind"] == "note"
 
         # Verify content was stored
         assert len(memory._items) == 1

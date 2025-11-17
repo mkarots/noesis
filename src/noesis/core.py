@@ -299,32 +299,17 @@ class Agent:
 
         # Build middleware chain
         async def base_handler() -> AgentResult:
-            try:
-                output = await self._handler(ctx)
-                return AgentResult(
-                    ok=True,
-                    output=output,
-                    state=ctx.state,
-                    events=ctx.events,
-                )
-            except AgentError as e:
-                return AgentResult(
-                    ok=False,
-                    error=str(e),
-                    state=ctx.state,
-                    events=ctx.events,
-                )
-            except Exception as e:
-                return AgentResult(
-                    ok=False,
-                    error=f"internal_error: {str(e)}",
-                    state=ctx.state,
-                    events=ctx.events,
-                )
+            output = await self._handler(ctx)
+            return AgentResult(
+                ok=True,
+                output=output,
+                state=ctx.state,
+                events=ctx.events,
+            )
 
         # Chain middlewares in reverse order
         handler = base_handler
-        for mw in reversed[MiddlewareFn](self._middlewares):
+        for mw in reversed(self._middlewares):
             current_handler = handler
 
             async def make_handler(middleware=mw, next_fn=current_handler):
@@ -332,7 +317,23 @@ class Agent:
 
             handler = make_handler
 
-        return await handler()
+        # Wrap in error handler
+        try:
+            return await handler()
+        except AgentError as e:
+            return AgentResult(
+                ok=False,
+                error=str(e),
+                state=ctx.state,
+                events=ctx.events,
+            )
+        except Exception as e:
+            return AgentResult(
+                ok=False,
+                error=f"internal_error: {str(e)}",
+                state=ctx.state,
+                events=ctx.events,
+            )
 
     # Tool protocol implementation - allows agent to be used as tool
     async def __call__(self, input: dict, **kwargs) -> Any:

@@ -35,20 +35,30 @@ def otel_middleware(tracer: Any):
             if ctx.session_id:
                 span.set_attribute("agent.session_id", ctx.session_id)
 
-            # Execute handler
-            result = await next_fn()
+            try:
+                # Execute handler
+                result = await next_fn()
 
-            # Mark success/failure
-            span.set_attribute("agent.ok", result.ok)
-            
-            if not result.ok:
-                span.set_attribute("agent.error", result.error or "")
+                # Mark success/failure
+                span.set_attribute("agent.ok", result.ok)
+                
+                if not result.ok:
+                    span.set_attribute("agent.error", result.error or "")
+                    span.set_status(
+                        status=1,  # StatusCode.ERROR
+                        description=result.error or "Agent execution failed",
+                    )
+                else:
+                    span.set_status(status=0)  # StatusCode.OK
+            except Exception as e:
+                # Handle exceptions that weren't caught
+                span.set_attribute("agent.ok", False)
+                span.set_attribute("agent.error", str(e))
                 span.set_status(
                     status=1,  # StatusCode.ERROR
-                    description=result.error or "Agent execution failed",
+                    description=f"Exception: {str(e)}",
                 )
-            else:
-                span.set_status(status=0)  # StatusCode.OK
+                raise
 
             # Attach events as OTEL events
             for event in ctx.events:
