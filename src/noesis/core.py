@@ -70,11 +70,11 @@ class Context:
     created_at: float
     _services: RuntimeServices
 
-    async def tool(self, name: str, **kwargs) -> Any:
+    async def tool(self, tool_name: str, **kwargs) -> Any:
         """Call a registered tool.
         
         Args:
-            name: Tool name
+            tool_name: Tool name
             **kwargs: Tool arguments
             
         Returns:
@@ -83,7 +83,7 @@ class Context:
         Raises:
             ToolError: If tool execution fails
         """
-        return await self._services.call_tool(self, name, **kwargs)
+        return await self._services.call_tool(self, tool_name, **kwargs)
 
     async def remember(self, content: str, *, kind: str = "note", **meta) -> None:
         """Store a memory item.
@@ -324,7 +324,7 @@ class Agent:
 
         # Chain middlewares in reverse order
         handler = base_handler
-        for mw in reversed(self._middlewares):
+        for mw in reversed[MiddlewareFn](self._middlewares):
             current_handler = handler
 
             async def make_handler(middleware=mw, next_fn=current_handler):
