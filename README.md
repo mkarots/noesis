@@ -1,41 +1,21 @@
-# Noesis Agent Framework V3
+# Noesis
 
-A minimal, composable agent framework built on simplicity, modularity, and extensibility.
+Production runtime for AI agents.
 
-## Design Principles
-
-- **Simplicity**: Everything understandable in one sitting
-- **Composability**: Features added through middlewares and registries
-- **Modularity**: Memory, tools, OTEL, reflection, and sessions are optional
-- **Extensibility**: Clear interfaces, no globals, no magic
-- **Single Object UX**: Interact mainly with a single `Agent`
-
-## Quick Start
+Define an agent, run it through a middleware pipeline, serve it over HTTP. Memory, sessions, and tracing are optional.
 
 ```python
-from noesis import Agent
+from noesis import Agent, Runtime, serve
 
-# Create an agent
-agent = Agent(name="my_agent", description="A helpful agent")
+agent = Agent(name="support")
 
-# Register a handler
 @agent.handler
 async def handle(ctx):
-    return f"Hello from {agent.name}!"
+    return {"reply": "Hello!"}
 
-# Invoke the agent
-result = await agent.invoke({"message": "hi"})
-print(result.output)  # "Hello from my_agent!"
+runtime = Runtime(agent)
+app = serve(runtime)  # POST /invoke, GET /health
 ```
-
-## Features
-
-- **Tool System**: Register functions as tools, use agents as tools
-- **Middleware Engine**: Composable request/response pipeline
-- **Optional Subsystems**: Memory, Reflection, OpenTelemetry
-- **HTTP Runtime**: FastAPI integration with `/invoke` and `/health`
-- **Flow Orchestration**: Sequential agent composition
-- **Comprehensive Testing**: Full test coverage included
 
 ## Installation
 
@@ -49,11 +29,87 @@ pip install -e ".[otel]"
 pip install -e ".[dev]"
 ```
 
-## Core Concepts
+## Core concepts
 
-### Agent
+**Agent** is the definition: name, handler, tools.  
+**Runtime** is the execution layer: invoke, middleware, tracing, memory.  
+**serve()** is the HTTP transport.
 
-The main abstraction. Implements the Tool protocol so agents can be used as tools.
+`agent.invoke()` still works. It creates a default `Runtime` for you.
+
+## Quick start
+
+```python
+from noesis import Agent
+
+agent = Agent(name="my_agent", description="A helpful agent")
+
+@agent.handler
+async def handle(ctx):
+    return f"Hello from {agent.name}!"
+
+result = await agent.invoke({"message": "hi"})
+print(result.output)  # "Hello from my_agent!"
+```
+
+OpenAI-style messages are also supported:
+
+```python
+result = await agent.invoke(
+    messages=[{"role": "user", "content": "what is the weather in sf"}]
+)
+```
+
+## Runtime
+
+Use `Runtime` when you want production concerns on the invocation path:
+
+```python
+from noesis import Agent, Runtime, serve
+from noesis.middleware import timeout_middleware
+
+agent = Agent(name="support")
+
+@agent.handler
+async def handle(ctx):
+    return "Hello!"
+
+runtime = (
+    Runtime(agent)
+    .use(timeout_middleware(30.0))
+    .with_tracing(tracer)   # auto-registers OTEL middleware
+    .with_memory(store)
+)
+
+result = await runtime.invoke({"message": "hi"})
+app = serve(runtime)
+```
+
+`Runtime.with_tracing(tracer)` registers OpenTelemetry middleware. You do not need a separate `use_otel()` call.
+
+## HTTP
+
+```python
+from noesis import Agent, Runtime, serve
+
+agent = Agent(name="api_agent")
+
+@agent.handler
+async def handle(ctx):
+    return {"message": "Hello, world!"}
+
+app = serve(Runtime(agent))
+# uvicorn main:app
+```
+
+`serve()` accepts an `Agent` or a `Runtime`. `build_fastapi()` is kept as an alias.
+
+Endpoints:
+
+- `POST /invoke` — body is `{ "input": {...} }` or `{ "messages": [...] }`, plus optional `state` and `meta`
+- `GET /health` — `{ "status": "ok", "agent": "<name>" }`
+
+## Tools
 
 ```python
 agent = Agent(name="calculator", description="Does math")
@@ -68,29 +124,50 @@ async def handle(ctx):
     return f"Result: {result}"
 ```
 
-### Context
+Agents implement the tool protocol, so one agent can call another:
 
-Passed to handlers and middlewares. Provides access to tools, memory, and events.
+```python
+specialized = Agent(name="specialist")
+
+@specialized.handler
+async def handle(ctx):
+    return "Specialized result"
+
+main = Agent(name="main")
+main.tool(specialized)
+
+@main.handler
+async def handle(ctx):
+    return await ctx.tool("specialist", task="do something")
+```
+
+## Context
+
+Handlers and middleware receive a `Context`:
 
 ```python
 @agent.handler
 async def handle(ctx):
-    # Call tools
     result = await ctx.tool("my_tool", param="value")
-    
-    # Access memory (if configured)
     await ctx.remember("Important fact")
     memories = await ctx.recall("query")
-    
-    # Add events
     ctx.add_event("custom", data={"key": "value"})
-    
     return result
 ```
 
-### Middlewares
+`ctx.messages` returns the OpenAI-style list when the input used `messages=`.
 
-Composable request/response pipeline. Built-in middlewares include error handling, timeout, and session management.
+## Middleware
+
+Middleware wraps the invocation pipeline. Built-ins: timeout, session, error handling.
+
+```python
+from noesis.middleware import timeout_middleware
+
+runtime = Runtime(agent).use(timeout_middleware(30.0))
+```
+
+Custom middleware:
 
 ```python
 async def logging_middleware(ctx, next_fn):
@@ -99,50 +176,10 @@ async def logging_middleware(ctx, next_fn):
     print(f"Status: {result.ok}")
     return result
 
-agent.use(logging_middleware)
+runtime.use(logging_middleware)
 ```
 
-### Agent as Tool
-
-Agents implement the Tool protocol and can be used as tools in other agents:
-
-```python
-specialized_agent = Agent(name="specialist", description="Specialized task")
-
-@specialized_agent.handler
-async def handle(ctx):
-    return "Specialized result"
-
-main_agent = Agent(name="main")
-main_agent.tool(specialized_agent)  # Register agent as tool
-
-@main_agent.handler
-async def handle(ctx):
-    result = await ctx.tool("specialist", input={"task": "do something"})
-    return result
-```
-
-## HTTP Runtime
-
-```python
-from noesis import Agent
-from noesis.http import build_fastapi
-
-agent = Agent(name="api_agent")
-
-@agent.handler
-async def handle(ctx):
-    return {"message": "Hello, world!"}
-
-# Create FastAPI app
-app = build_fastapi(agent)
-
-# Run with: uvicorn main:app
-```
-
-Endpoints:
-- `POST /invoke`: Invoke the agent
-- `GET /health`: Health check
+`agent.use(...)` still works and runs before runtime-level middleware.
 
 ## Testing
 
@@ -153,4 +190,3 @@ pytest
 ## License
 
 MIT
-
