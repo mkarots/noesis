@@ -1,7 +1,5 @@
-"""Core abstractions for Noesis framework."""
+"""Core abstractions for the Noesis production runtime."""
 
-import time
-import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any
@@ -70,6 +68,13 @@ class Context:
     created_at: float
     _services: RuntimeServices
 
+    @property
+    def messages(self) -> list[dict]:
+        """Extract OpenAI-style messages from input, if present."""
+        if "messages" in self.input and isinstance(self.input["messages"], list):
+            return self.input["messages"]
+        return []
+
     async def tool(self, tool_name: str, **kwargs) -> Any:
         """Call a registered tool.
         
@@ -129,17 +134,14 @@ ToolFn = Callable[..., Awaitable[Any]]
 
 
 class Agent:
-    """Main agent abstraction.
-    
+    """Agent definition for the Noesis production runtime.
+
+    Describes what an agent is: a handler, tools, and optional configuration.
+    For execution, use :class:`~noesis.runtime.Runtime` or ``agent.invoke()``
+    (which delegates to a default runtime).
+
     Implements the Tool protocol so agents can be used as tools.
-    Responsibilities:
-    - Register handler (exactly one)
-    - Register tools
-    - Manage middlewares
-    - Provide invoke() API
-    - Hold references to optional subsystems
-    - Construct execution context & runtime services
-    
+
     Args:
         name: Agent name (used as tool name when agent-as-tool)
         description: Agent description (used as tool description)
@@ -242,11 +244,17 @@ class Agent:
 
     def use_otel(self, tracer: Any) -> None:
         """Configure OpenTelemetry tracing.
-        
+
+        Registers OTEL middleware automatically. Prefer
+        ``Runtime(agent).with_tracing(tracer)`` for new code.
+
         Args:
             tracer: OTEL tracer instance
         """
+        from noesis.otel import otel_middleware
+
         self._tracer = tracer
+        self.use(otel_middleware(tracer))
 
     def use_reflection(self, client: Any, **opts) -> None:
         """Configure reflection/self-evaluation.
@@ -260,80 +268,38 @@ class Agent:
 
     async def invoke(
         self,
-        input: dict,
+        input: dict | None = None,
         *,
+        messages: list[dict] | None = None,
         state: dict | None = None,
         meta: dict | None = None,
     ) -> AgentResult:
-        """Invoke the agent with given input.
-        
+        """Invoke the agent via a default :class:`~noesis.runtime.Runtime`.
+
+        Supports both dict input and OpenAI-style messages format.
+        For production middleware and tracing, prefer creating a
+        ``Runtime`` explicitly.
+
         Args:
-            input: User input
+            input: User input dict (optional if messages provided)
+            messages: OpenAI-style messages list (optional if input provided)
             state: Optional initial state
             meta: Optional metadata
-            
+
         Returns:
             AgentResult with output, state, events
-            
+
         Raises:
-            AgentError: If no handler registered
+            AgentError: If no handler registered or neither input nor messages provided
         """
-        if self._handler is None:
-            raise AgentError("No handler registered")
+        from noesis.runtime import Runtime
 
-        # Import here to avoid circular dependency
-        from noesis.runtime import AppRuntimeServices
-
-        # Create context
-        ctx = Context(
+        return await Runtime(self).invoke(
             input=input,
-            state=state or {},
-            meta=meta or {},
-            events=[],
-            session_id=input.get("session_id") or (meta or {}).get("session_id"),
-            history=None,
-            request_id=str(uuid.uuid4()),
-            created_at=time.time(),
-            _services=AppRuntimeServices(self),
+            messages=messages,
+            state=state,
+            meta=meta,
         )
-
-        # Build middleware chain
-        async def base_handler() -> AgentResult:
-            output = await self._handler(ctx)
-            return AgentResult(
-                ok=True,
-                output=output,
-                state=ctx.state,
-                events=ctx.events,
-            )
-
-        # Chain middlewares in reverse order
-        handler = base_handler
-        for mw in reversed(self._middlewares):
-            current_handler = handler
-
-            async def make_handler(middleware=mw, next_fn=current_handler):
-                return await middleware(ctx, next_fn)
-
-            handler = make_handler
-
-        # Wrap in error handler
-        try:
-            return await handler()
-        except AgentError as e:
-            return AgentResult(
-                ok=False,
-                error=str(e),
-                state=ctx.state,
-                events=ctx.events,
-            )
-        except Exception as e:
-            return AgentResult(
-                ok=False,
-                error=f"internal_error: {str(e)}",
-                state=ctx.state,
-                events=ctx.events,
-            )
 
     # Tool protocol implementation - allows agent to be used as tool
     async def __call__(self, input: dict, **kwargs) -> Any:

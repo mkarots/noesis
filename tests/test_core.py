@@ -372,7 +372,7 @@ class TestAgent:
         assert agent._memory == memory
 
     def test_use_otel(self):
-        """Test configuring OTEL."""
+        """Test configuring OTEL registers tracing middleware."""
         agent = Agent(name="test")
 
         class MockTracer:
@@ -381,6 +381,7 @@ class TestAgent:
         tracer = MockTracer()
         agent.use_otel(tracer)
         assert agent._tracer == tracer
+        assert len(agent._middlewares) == 1
 
     def test_use_reflection(self):
         """Test configuring reflection."""

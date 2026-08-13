@@ -1,14 +1,16 @@
-"""Noesis Agent Framework V3
+"""Noesis — production runtime for AI agents.
 
-A minimal, composable agent framework.
+Deploy any agent framework. Add production features. Compose across frameworks.
 """
 
 from noesis.core import Agent, AgentResult, Context, RuntimeEvent
 from noesis.errors import AgentError, TimeoutError, ToolError, UserError
 from noesis.flow import Flow
+from noesis.http import build_fastapi, serve
 from noesis.memory import InMemoryStore
 from noesis.middleware import error_middleware, session_middleware, timeout_middleware
 from noesis.protocols import MemoryStore, ReflectionClient, RuntimeServices, Tool
+from noesis.runtime import Runtime
 
 __version__ = "0.1.0"
 
@@ -18,6 +20,10 @@ __all__ = [
     "Context",
     "AgentResult",
     "RuntimeEvent",
+    "Runtime",
+    # Transport
+    "serve",
+    "build_fastapi",
     # Protocols
     "Tool",
     "MemoryStore",

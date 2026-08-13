@@ -1,19 +1,30 @@
-"""FastAPI HTTP runtime for agents."""
+"""HTTP transport for the Noesis production runtime."""
 
 from typing import Any
 
 from fastapi import FastAPI
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from noesis.core import Agent, AgentResult
+from noesis.runtime import Runtime
 
 
 class InvokeRequest(BaseModel):
     """Request model for /invoke endpoint."""
 
-    input: dict = Field(..., description="User input")
+    input: dict | None = Field(None, description="User input dict")
+    messages: list[dict] | None = Field(None, description="OpenAI-style messages list")
     state: dict | None = Field(None, description="Optional initial state")
     meta: dict | None = Field(None, description="Optional metadata")
+
+    @model_validator(mode="after")
+    def validate_input_or_messages(self):
+        """Validate that either input or messages is provided."""
+        if self.input is None and self.messages is None:
+            raise ValueError("Must provide either 'input' or 'messages'")
+        if self.input is not None and self.messages is not None:
+            raise ValueError("Cannot provide both 'input' and 'messages'")
+        return self
 
 
 class InvokeResponse(BaseModel):
@@ -32,29 +43,26 @@ class HealthResponse(BaseModel):
     agent: str = Field(..., description="Agent name")
 
 
-def build_fastapi(agent: Agent) -> FastAPI:
-    """Build a FastAPI app for the given agent.
-    
-    Creates a FastAPI application with:
-    - POST /invoke: Invoke the agent
-    - GET /health: Health check
-    
-    Args:
-        agent: Agent instance
-        
-    Returns:
-        FastAPI application
-        
+def _resolve_runtime(agent_or_runtime: Agent | Runtime) -> tuple[Runtime, Agent]:
+    """Return a runtime and its agent definition."""
+    if isinstance(agent_or_runtime, Runtime):
+        return agent_or_runtime, agent_or_runtime.agent
+    return Runtime(agent_or_runtime), agent_or_runtime
+
+
+def serve(agent_or_runtime: Agent | Runtime) -> FastAPI:
+    """Serve an agent over HTTP.
+
+    Preferred entry point for exposing agents as a production HTTP API.
+    Accepts either an :class:`~noesis.core.Agent` or a configured
+    :class:`~noesis.runtime.Runtime`.
+
     Example:
-        agent = Agent(name="my_agent")
-        
-        @agent.handler
-        async def handle(ctx):
-            return "Hello!"
-        
-        app = build_fastapi(agent)
-        # Run with: uvicorn main:app
+        runtime = Runtime(agent).with_tracing(tracer)
+        app = serve(runtime)
     """
+    runtime, agent = _resolve_runtime(agent_or_runtime)
+
     app = FastAPI(
         title=f"Noesis Agent: {agent.name}",
         description=agent.description or "Agent API",
@@ -63,16 +71,10 @@ def build_fastapi(agent: Agent) -> FastAPI:
 
     @app.post("/invoke", response_model=InvokeResponse)
     async def invoke(request: InvokeRequest) -> InvokeResponse:
-        """Invoke the agent with given input.
-        
-        Args:
-            request: Invoke request with input, state, meta
-            
-        Returns:
-            Agent result with output, error, state
-        """
-        result: AgentResult = await agent.invoke(
+        """Invoke the agent with given input."""
+        result: AgentResult = await runtime.invoke(
             input=request.input,
+            messages=request.messages,
             state=request.state,
             meta=request.meta,
         )
@@ -86,15 +88,15 @@ def build_fastapi(agent: Agent) -> FastAPI:
 
     @app.get("/health", response_model=HealthResponse)
     async def health() -> HealthResponse:
-        """Health check endpoint.
-        
-        Returns:
-            Health status and agent name
-        """
-        return HealthResponse(
-            status="ok",
-            agent=agent.name,
-        )
+        """Health check endpoint."""
+        return HealthResponse(status="ok", agent=agent.name)
 
     return app
 
+
+def build_fastapi(agent_or_runtime: Agent | Runtime) -> FastAPI:
+    """Build a FastAPI app for the given agent or runtime.
+
+    Alias for :func:`serve`. Prefer ``serve()`` in new code.
+    """
+    return serve(agent_or_runtime)
