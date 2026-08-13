@@ -2,7 +2,7 @@
 
 import pytest
 
-from noesis import Agent, ToolError
+from noesis import Agent, Runtime, ToolError
 from noesis.memory import InMemoryStore
 from noesis.runtime import AppRuntimeServices
 
@@ -176,4 +176,109 @@ class TestAppRuntimeServices:
         assert len(read_events) == 1
         assert len(result_events) == 1
         assert result_events[0].data["count"] == 1
+
+
+class TestRuntime:
+    """Test Runtime invocation wrapper."""
+
+    async def test_runtime_invoke_basic(self):
+        """Runtime invokes the wrapped agent."""
+        agent = Agent(name="test")
+
+        @agent.handler
+        async def handle(ctx):
+            return "hello"
+
+        runtime = Runtime(agent)
+        result = await runtime.invoke({"message": "test"})
+        assert result.ok is True
+        assert result.output == "hello"
+
+    async def test_runtime_with_messages(self):
+        """Runtime supports OpenAI-style messages input."""
+        agent = Agent(name="test")
+
+        @agent.handler
+        async def handle(ctx):
+            return ctx.messages[-1]["content"]
+
+        runtime = Runtime(agent)
+        result = await runtime.invoke(
+            messages=[{"role": "user", "content": "weather"}]
+        )
+        assert result.ok is True
+        assert result.output == "weather"
+
+    async def test_runtime_middleware_chain(self):
+        """Runtime-specific middleware runs with agent middleware."""
+        agent = Agent(name="test")
+        order = []
+
+        async def agent_mw(ctx, next_fn):
+            order.append("agent")
+            return await next_fn()
+
+        async def runtime_mw(ctx, next_fn):
+            order.append("runtime")
+            return await next_fn()
+
+        agent.use(agent_mw)
+
+        @agent.handler
+        async def handle(ctx):
+            order.append("handler")
+            return "ok"
+
+        runtime = Runtime(agent).use(runtime_mw)
+        await runtime.invoke({})
+
+        assert order == ["agent", "runtime", "handler"]
+
+    async def test_runtime_with_tracing_registers_middleware(self):
+        """with_tracing auto-registers OTEL middleware."""
+        agent = Agent(name="test")
+
+        @agent.handler
+        async def handle(ctx):
+            return "ok"
+
+        class MockTracer:
+            def start_as_current_span(self, name):
+                class Span:
+                    def __enter__(self):
+                        return self
+
+                    def __exit__(self, *args):
+                        pass
+
+                    def set_attribute(self, *args, **kwargs):
+                        pass
+
+                    def add_event(self, *args, **kwargs):
+                        pass
+
+                    def set_status(self, *args, **kwargs):
+                        pass
+
+                return Span()
+
+        runtime = Runtime(agent).with_tracing(MockTracer())
+        assert runtime.agent._tracer is not None
+        assert len(runtime._middlewares) == 1
+
+        result = await runtime.invoke({})
+        assert result.ok is True
+
+    async def test_runtime_with_memory(self):
+        """with_memory configures the wrapped agent."""
+        agent = Agent(name="test")
+        memory = InMemoryStore()
+        runtime = Runtime(agent).with_memory(memory)
+        assert runtime.agent._memory is memory
+
+    def test_runtime_exposes_agent(self):
+        """Runtime.agent returns the wrapped definition."""
+        agent = Agent(name="bot")
+        runtime = Runtime(agent)
+        assert runtime.agent is agent
 

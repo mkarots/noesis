@@ -3,7 +3,7 @@
 import pytest
 from fastapi.testclient import TestClient
 
-from noesis import Agent
+from noesis import Agent, Runtime, serve
 from noesis.http import build_fastapi
 
 
@@ -285,4 +285,50 @@ class TestHttpWithAgentAsTools:
         data = response.json()
         assert data["ok"] is True
         assert data["output"] == "Calculation result: 15"
+
+
+class TestServe:
+    """Test serve() HTTP entry point."""
+
+    def test_serve_is_alias_for_build_fastapi(self):
+        """serve() and build_fastapi() return equivalent apps."""
+        agent = Agent(name="test")
+
+        @agent.handler
+        async def handle(ctx):
+            return "hello"
+
+        assert serve(agent).title == build_fastapi(agent).title
+
+    def test_serve_accepts_runtime(self):
+        """serve() accepts a configured Runtime."""
+        agent = Agent(name="test")
+
+        @agent.handler
+        async def handle(ctx):
+            return ctx.input.get("value")
+
+        runtime = Runtime(agent)
+        client = TestClient(serve(runtime))
+
+        response = client.post("/invoke", json={"input": {"value": "runtime"}})
+        assert response.status_code == 200
+        assert response.json()["output"] == "runtime"
+
+    def test_serve_invoke_with_messages(self):
+        """serve() supports messages format on /invoke."""
+        agent = Agent(name="test")
+
+        @agent.handler
+        async def handle(ctx):
+            return ctx.messages[-1]["content"]
+
+        client = TestClient(serve(agent))
+        response = client.post(
+            "/invoke",
+            json={"messages": [{"role": "user", "content": "hi"}]},
+        )
+
+        assert response.status_code == 200
+        assert response.json()["output"] == "hi"
 
